@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-codex-chat",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Chat with OpenAI Codex directly in Obsidian using the local CLI",
 	"main": "main.js",
 	"type": "module",

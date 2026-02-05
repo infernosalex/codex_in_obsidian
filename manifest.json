@@ -1,7 +1,7 @@
 {
 	"id": "codex-chat",
 	"name": "Codex Chat",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"minAppVersion": "1.0.0",
 	"description": "Chat with OpenAI Codex directly in Obsidian. Uses the local Codex CLI — no API keys needed.",
 	"author": "infernosalex",
