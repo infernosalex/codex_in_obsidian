@@ -1,0 +1,148 @@
+name: Release (from versions.json)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "versions.json"
+      - "manifest.json"
+      - "src/**"
+      - "esbuild.config.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - "styles.css"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: "npm"
+
+      - name: Detect version bump
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BEFORE_SHA="${{ github.event.before }}"
+          if git cat-file -e "$BEFORE_SHA:versions.json" 2>/dev/null; then
+            git show "$BEFORE_SHA:versions.json" > /tmp/versions.before.json
+          else
+            printf "{}\n" > /tmp/versions.before.json
+          fi
+          cp versions.json /tmp/versions.current.json
+
+          node --input-type=module <<'NODE'
+          import fs from "fs";
+          import process from "process";
+          import path from "path";
+
+          function readJson(p) {
+            return JSON.parse(fs.readFileSync(p, "utf8"));
+          }
+
+          const before = readJson("/tmp/versions.before.json");
+          const current = readJson("/tmp/versions.current.json");
+
+          const beforeKeys = new Set(Object.keys(before ?? {}));
+          const newVersions = Object.keys(current ?? {}).filter((k) => !beforeKeys.has(k));
+
+          const manifest = readJson(path.resolve("manifest.json"));
+          const manifestVersion = String(manifest.version ?? "");
+          const manifestMinAppVersion = String(manifest.minAppVersion ?? "");
+
+          const outPath = process.env.GITHUB_OUTPUT;
+          const writeOut = (k, v) => fs.appendFileSync(outPath, `${k}=${v}\n`);
+
+          if (newVersions.length === 0) {
+            writeOut("should_release", "false");
+            process.exit(0);
+          }
+
+          if (newVersions.length !== 1) {
+            console.error(`Expected exactly 1 new key in versions.json, found ${newVersions.length}: ${newVersions.join(", ")}`);
+            process.exit(1);
+          }
+
+          const version = newVersions[0];
+          if (manifestVersion !== version) {
+            console.error(`manifest.json version (${manifestVersion}) must match the new versions.json key (${version}).`);
+            process.exit(1);
+          }
+
+          const mappedMin = String(current?.[version] ?? "");
+          if (!mappedMin) {
+            console.error(`versions.json is missing a minAppVersion mapping for ${version}.`);
+            process.exit(1);
+          }
+          if (mappedMin !== manifestMinAppVersion) {
+            console.error(`versions.json[${version}] (${mappedMin}) must match manifest.json minAppVersion (${manifestMinAppVersion}).`);
+            process.exit(1);
+          }
+
+          writeOut("should_release", "true");
+          writeOut("version", version);
+          NODE
+
+      - name: Skip if tag already exists
+        id: tagcheck
+        if: steps.bump.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.bump.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install
+        if: steps.tagcheck.outputs.should_release == 'true'
+        run: npm ci
+
+      - name: Build
+        if: steps.tagcheck.outputs.should_release == 'true'
+        run: npm run build
+
+      - name: Collect release assets
+        id: assets
+        if: steps.tagcheck.outputs.should_release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f manifest.json
+          test -f main.js
+
+          {
+            echo "files<<EOF"
+            echo "manifest.json"
+            echo "main.js"
+            if [ -f styles.css ]; then
+              echo "styles.css"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: steps.tagcheck.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.version }}
+          name: ${{ steps.bump.outputs.version }}
+          generate_release_notes: true
+          files: ${{ steps.assets.outputs.files }}
+
