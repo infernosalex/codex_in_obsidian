@@ -118,24 +118,29 @@ jobs:
         if: steps.tagcheck.outputs.should_release == 'true'
         run: npm run build
 
-      - name: Collect release assets
-        id: assets
+      - name: Package release zip
+        id: package
         if: steps.tagcheck.outputs.should_release == 'true'
         shell: bash
         run: |
           set -euo pipefail
           test -f manifest.json
           test -f main.js
+          command -v zip >/dev/null 2>&1
 
-          {
-            echo "files<<EOF"
-            echo "manifest.json"
-            echo "main.js"
-            if [ -f styles.css ]; then
-              echo "styles.css"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          VERSION="${{ steps.bump.outputs.version }}"
+          ZIP_NAME="codex_in_obsidian_v${VERSION}.zip"
+
+          rm -rf /tmp/obsidian-plugin-release
+          mkdir -p /tmp/obsidian-plugin-release
+          cp manifest.json main.js /tmp/obsidian-plugin-release/
+          if [ -f styles.css ]; then
+            cp styles.css /tmp/obsidian-plugin-release/
+          fi
+
+          (cd /tmp/obsidian-plugin-release && zip -r "${ZIP_NAME}" .)
+          mv "/tmp/obsidian-plugin-release/${ZIP_NAME}" "./${ZIP_NAME}"
+          echo "zip_path=./${ZIP_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         if: steps.tagcheck.outputs.should_release == 'true'
@@ -144,5 +149,4 @@ jobs:
           tag_name: ${{ steps.bump.outputs.version }}
           name: ${{ steps.bump.outputs.version }}
           generate_release_notes: true
-          files: ${{ steps.assets.outputs.files }}
-
+          files: ${{ steps.package.outputs.zip_path }}
