@@ -6,12 +6,22 @@ import { join } from "path";
 import { getShellEnv, resolveCodexBinary } from "./shell-env";
 
 /**
- * Strip ANSI escape sequences from a string.
- * Handles color codes, cursor movement, and other terminal control sequences.
+ * Strip ANSI escape sequences and terminal control characters from a string.
+ * Handles CSI sequences (colors, cursor), OSC sequences, and carriage returns.
  */
 function stripAnsi(text: string): string {
-	// eslint-disable-next-line no-control-regex
-	return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
+	return text
+		// CSI sequences: ESC [ ... letter  (e.g. \x1b[90m, \x1b[0m, \x1b[2J)
+		// eslint-disable-next-line no-control-regex
+		.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+		// OSC sequences: ESC ] ... BEL
+		// eslint-disable-next-line no-control-regex
+		.replace(/\x1b\][^\x07]*\x07/g, "")
+		// Other ESC sequences (e.g. ESC(B)
+		// eslint-disable-next-line no-control-regex
+		.replace(/\x1b[^[\]].?/g, "")
+		// Carriage returns (common in PTY / script output)
+		.replace(/\r/g, "");
 }
 
 /**
@@ -32,8 +42,8 @@ export class CodexAuth {
 
 	/**
 	 * Check if the user has valid cached credentials.
-	 * Reads ~/.codex/auth.json and checks for token expiry.
-	 * Falls back to `codex auth status` if the file-based check is inconclusive.
+	 * Reads ~/.codex/auth.json and checks for token presence.
+	 * Falls back to `codex login status` if the file-based check is inconclusive.
 	 */
 	async isAuthenticated(): Promise<boolean> {
 		const authFile = join(homedir(), ".codex", "auth.json");
@@ -41,29 +51,40 @@ export class CodexAuth {
 			return false;
 		}
 
-		// Try to parse the auth file and check token expiry
+		// Try to parse the auth file and check token presence
 		try {
 			const raw = readFileSync(authFile, "utf-8");
 			const data = JSON.parse(raw) as Record<string, unknown>;
 
-			// Check common expiry fields
-			const expiresAt = data["expires_at"] ?? data["expiry"];
-			if (typeof expiresAt === "number") {
-				// Treat as unix timestamp (seconds). Add 60s buffer.
-				const nowSec = Math.floor(Date.now() / 1000);
-				if (expiresAt <= nowSec + 60) {
-					// Token expired — try refresh via CLI
-					return this.checkAuthViaCli();
+			// Codex stores tokens nested under a "tokens" key
+			const tokens = data["tokens"] as Record<string, unknown> | undefined;
+
+			if (tokens) {
+				// Check for access_token or refresh_token in the tokens object
+				if (tokens["access_token"] || tokens["refresh_token"]) {
+					return true;
 				}
 			}
 
-			// If we have an access_token or token field, consider authenticated
-			if (data["access_token"] || data["token"]) {
+			// Also check top-level fields (for alternative auth file formats)
+			if (data["access_token"] || data["token"] || data["OPENAI_API_KEY"]) {
+				// OPENAI_API_KEY can be null — check it's truthy
+				const apiKey = data["OPENAI_API_KEY"];
+				if (apiKey && typeof apiKey === "string") {
+					return true;
+				}
+				if (data["access_token"] || data["token"]) {
+					return true;
+				}
+			}
+
+			// Check auth_mode — if chatgpt mode is set and tokens exist, we're good
+			if (data["auth_mode"] === "chatgpt" && tokens) {
 				return true;
 			}
 
-			// File exists but structure is unknown — trust it
-			return true;
+			// File exists but structure is unrecognized — fall back to CLI
+			return this.checkAuthViaCli();
 		} catch {
 			// File exists but is unparseable — try CLI fallback
 			return this.checkAuthViaCli();
@@ -71,12 +92,12 @@ export class CodexAuth {
 	}
 
 	/**
-	 * Check authentication status via the CLI as a fallback.
+	 * Check authentication status via `codex login status` CLI command.
 	 */
 	private checkAuthViaCli(): Promise<boolean> {
 		return new Promise<boolean>((resolve) => {
 			try {
-				const proc = spawn(this.binaryPath, ["auth", "status"], {
+				const proc = spawn(this.binaryPath, ["login", "status"], {
 					timeout: 10000,
 					stdio: ["ignore", "pipe", "pipe"],
 					env: getShellEnv(),
@@ -86,15 +107,20 @@ export class CodexAuth {
 				proc.stdout?.on("data", (chunk: Uint8Array) => {
 					stdout += new TextDecoder().decode(chunk);
 				});
+				let stderr = "";
+				proc.stderr?.on("data", (chunk: Uint8Array) => {
+					stderr += new TextDecoder().decode(chunk);
+				});
 
 				proc.on("close", (code) => {
+					const combined = (stdout + stderr).toLowerCase();
 					if (code === 0) {
-						// CLI confirms auth is valid
 						resolve(true);
 					} else {
-						// Check if stdout mentions "logged in" or similar
-						const lower = stdout.toLowerCase();
-						resolve(lower.includes("logged in") || lower.includes("authenticated"));
+						resolve(
+							combined.includes("logged in") ||
+							combined.includes("authenticated")
+						);
 					}
 				});
 
@@ -108,9 +134,9 @@ export class CodexAuth {
 	}
 
 	/**
-	 * Trigger the device-code login flow.
-	 * Spawns `codex login --device-auth`, parses the code/URL,
-	 * and shows them in an Obsidian Modal.
+	 * Trigger the login flow.
+	 * Spawns `codex login` which starts a local callback server and
+	 * opens the browser for OAuth sign-in.
 	 */
 	async triggerLogin(): Promise<void> {
 		return new Promise<void>((resolve, reject) => {
@@ -121,13 +147,16 @@ export class CodexAuth {
 				return;
 			}
 
+			// Use TERM=xterm so the CLI produces readable output.
+			const loginEnv = { ...getShellEnv(), TERM: "xterm" };
+
 			try {
 				this.loginProcess = spawn(
 					this.binaryPath,
-					["login", "--device-auth"],
+					["login"],
 					{
 						stdio: ["ignore", "pipe", "pipe"],
-						env: getShellEnv(),
+						env: loginEnv,
 					}
 				);
 			} catch (err) {
@@ -138,7 +167,7 @@ export class CodexAuth {
 				return;
 			}
 
-			const modal = new DeviceCodeModal(app);
+			const modal = new LoginModal(app);
 			modal.open();
 
 			let allOutput = "";
@@ -147,19 +176,13 @@ export class CodexAuth {
 				const text = stripAnsi(new TextDecoder().decode(data));
 				allOutput += text;
 
-				// Try to extract a URL and code from the output
+				// Extract the login URL
 				const urlMatch = allOutput.match(
-					/https?:\/\/[^\s]+/
-				);
-				const codeMatch = allOutput.match(
-					/code[:\s]+([A-Z0-9-]+)/i
+					/(https?:\/\/[^\s\r\n]+)/
 				);
 
 				if (urlMatch) {
 					modal.setUrl(urlMatch[0]);
-				}
-				if (codeMatch?.[1]) {
-					modal.setCode(codeMatch[1]);
 				}
 
 				// Update raw output display
@@ -213,11 +236,10 @@ export class CodexAuth {
 }
 
 /**
- * Modal that displays the device-code login URL and code to the user.
+ * Modal that displays the login URL and CLI output to the user.
  */
-class DeviceCodeModal extends Modal {
+class LoginModal extends Modal {
 	private urlEl: HTMLElement | null = null;
-	private codeEl: HTMLElement | null = null;
 	private rawEl: HTMLElement | null = null;
 
 	constructor(app: App) {
@@ -231,23 +253,13 @@ class DeviceCodeModal extends Modal {
 
 		contentEl.createEl("h2", { text: "Sign in to codex" });
 		contentEl.createEl("p", {
-			text: "Follow the instructions below to sign in with your account.",
+			text: "A browser window should open automatically. If it doesn't, click the link below.",
 		});
 
-		const instructions = contentEl.createDiv({
-			cls: "codex-login-instructions",
-		});
-
-		instructions.createEl("p", { text: "If a URL and code appear below, open the URL in your browser and enter the code:" });
-
-		this.urlEl = instructions.createEl("div", {
+		this.urlEl = contentEl.createDiv({
 			cls: "codex-login-url",
 		});
-		this.urlEl.setText("Waiting for login URL...");
-
-		this.codeEl = instructions.createEl("div", {
-			cls: "codex-login-code",
-		});
+		this.urlEl.setText("Starting login...");
 
 		contentEl.createEl("h4", { text: "CLI output:" });
 		this.rawEl = contentEl.createEl("pre", {
@@ -268,17 +280,9 @@ class DeviceCodeModal extends Modal {
 		}
 	}
 
-	setCode(code: string) {
-		if (this.codeEl) {
-			this.codeEl.empty();
-			this.codeEl.createEl("strong", { text: "Code: " });
-			this.codeEl.createEl("code", { text: code, cls: "codex-device-code" });
-		}
-	}
-
 	setRawOutput(text: string) {
 		if (this.rawEl) {
-			this.rawEl.setText(text.slice(-2000)); // Keep last 2000 chars
+			this.rawEl.setText(text.slice(-2000));
 		}
 	}
 
