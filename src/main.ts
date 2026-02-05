@@ -4,6 +4,7 @@ import { DEFAULT_SETTINGS, CodexChatSettings, CodexChatSettingTab } from "./sett
 import { CodexAuth } from "./auth";
 import { CodexService } from "./codex-service";
 import { VaultContext } from "./context";
+import { SessionManager } from "./sessions";
 import { CodexChatView, VIEW_TYPE_CODEX_CHAT } from "./views/chat-view";
 import { resolveCodexBinary, clearShellEnvCache } from "./shell-env";
 
@@ -12,6 +13,7 @@ export default class CodexChatPlugin extends Plugin {
 	auth: CodexAuth = new CodexAuth(DEFAULT_SETTINGS.codexBinaryPath);
 	codexService: CodexService = new CodexService(DEFAULT_SETTINGS);
 	vaultContext: VaultContext = new VaultContext(this.app);
+	sessionManager: SessionManager = new SessionManager(this);
 
 	async onload() {
 		await this.loadSettings();
@@ -20,6 +22,8 @@ export default class CodexChatPlugin extends Plugin {
 		this.auth = new CodexAuth(this.settings.codexBinaryPath);
 		this.codexService = new CodexService(this.settings);
 		this.vaultContext = new VaultContext(this.app);
+		this.sessionManager = new SessionManager(this);
+		await this.sessionManager.load();
 
 		// Set vault base path so codex runs with the vault as cwd
 		if (this.app.vault.adapter instanceof FileSystemAdapter) {
@@ -129,6 +133,20 @@ export default class CodexChatPlugin extends Plugin {
 				const chatView = this.getChatView();
 				if (chatView) {
 					chatView.startNewConversation();
+				}
+			},
+		});
+
+		// Export chat to note
+		this.addCommand({
+			id: "export-chat",
+			name: "Export chat to note",
+			callback: async () => {
+				const chatView = this.getChatView();
+				if (chatView) {
+					await chatView.exportToNote();
+				} else {
+					new Notice("Open codex chat first.");
 				}
 			},
 		});

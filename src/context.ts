@@ -76,6 +76,126 @@ export class VaultContext {
 	}
 
 	/**
+	 * Resolve @file mentions in user text.
+	 * Returns an array of resolved TFiles and the cleaned text.
+	 */
+	resolveAtMentions(text: string): { cleanedText: string; files: TFile[] } {
+		const files: TFile[] = [];
+		const allFiles = this.app.vault.getFiles();
+
+		// Match @filename (with or without extension, can include spaces if quoted)
+		// Patterns: @filename, @"file name with spaces", @folder/filename
+		const cleanedText = text.replace(
+			/@"([^"]+)"|@([\w/.-]+)/g,
+			(match, quoted: string | undefined, plain: string | undefined) => {
+				const name = quoted ?? plain ?? "";
+				const resolved = this.findFile(name, allFiles);
+				if (resolved) {
+					files.push(resolved);
+					return `[${resolved.basename}]`;
+				}
+				return match; // Keep unresolved mentions as-is
+			}
+		);
+
+		return { cleanedText, files };
+	}
+
+	/**
+	 * Build context string for explicitly referenced files.
+	 */
+	async buildAtFileContext(files: TFile[], maxLength: number): Promise<string> {
+		if (files.length === 0) return "";
+
+		const parts: string[] = [];
+		let totalLength = 0;
+
+		for (const file of files) {
+			if (totalLength >= maxLength) break;
+			const content = await this.getFileContent(file);
+			const remaining = maxLength - totalLength;
+			const section = this.formatNoteContext(
+				file.basename,
+				file.path,
+				content,
+				remaining
+			);
+			parts.push(section);
+			totalLength += section.length;
+		}
+
+		if (parts.length === 0) return "";
+
+		return (
+			"Referenced files:\n" +
+			"─".repeat(40) +
+			"\n" +
+			parts.join("\n" + "─".repeat(40) + "\n") +
+			"\n" +
+			"─".repeat(40) +
+			"\n\n"
+		);
+	}
+
+	/**
+	 * Get file suggestions matching a partial name for autocomplete.
+	 */
+	getFileSuggestions(partial: string, limit = 10): TFile[] {
+		const lower = partial.toLowerCase();
+		const allFiles = this.app.vault.getFiles().filter(
+			(f) => f.extension === "md"
+		);
+
+		// Score files by how well they match the partial
+		const scored = allFiles
+			.map((f) => {
+				const name = f.basename.toLowerCase();
+				const path = f.path.toLowerCase();
+				let score = 0;
+				if (name === lower) score = 100;
+				else if (name.startsWith(lower)) score = 80;
+				else if (path.startsWith(lower)) score = 70;
+				else if (name.includes(lower)) score = 50;
+				else if (path.includes(lower)) score = 30;
+				return { file: f, score };
+			})
+			.filter((s) => s.score > 0)
+			.sort((a, b) => b.score - a.score);
+
+		return scored.slice(0, limit).map((s) => s.file);
+	}
+
+	/**
+	 * Find a file by name or path (fuzzy).
+	 */
+	private findFile(name: string, allFiles: TFile[]): TFile | null {
+		const lower = name.toLowerCase();
+
+		// Exact match by path
+		for (const f of allFiles) {
+			if (f.path.toLowerCase() === lower || f.path.toLowerCase() === lower + ".md") {
+				return f;
+			}
+		}
+
+		// Exact match by basename
+		for (const f of allFiles) {
+			if (f.basename.toLowerCase() === lower) {
+				return f;
+			}
+		}
+
+		// Partial match
+		for (const f of allFiles) {
+			if (f.basename.toLowerCase().startsWith(lower)) {
+				return f;
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Get the content of a note, selected text, or the full note.
 	 */
 	async getSelectedOrFullContent(): Promise<{

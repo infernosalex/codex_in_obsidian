@@ -5,6 +5,11 @@ export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 export type ContextMode = "none" | "current-note" | "current-and-linked";
 export type ReasoningEffort = "low" | "medium" | "high";
 
+export interface PromptTemplate {
+	name: string;
+	template: string;
+}
+
 export interface CodexChatSettings {
 	codexBinaryPath: string;
 	sandboxMode: SandboxMode;
@@ -14,6 +19,7 @@ export interface CodexChatSettings {
 	reasoningEffort: ReasoningEffort;
 	memoryTurns: number;
 	contextBudgetRatio: number;
+	promptTemplates: PromptTemplate[];
 }
 
 export const DEFAULT_SETTINGS: CodexChatSettings = {
@@ -25,6 +31,11 @@ export const DEFAULT_SETTINGS: CodexChatSettings = {
 	reasoningEffort: "medium",
 	memoryTurns: 10,
 	contextBudgetRatio: 0.6,
+	promptTemplates: [
+		{ name: "Summarize this note", template: "Please summarize the following note:\n\n{{note}}" },
+		{ name: "Explain this code", template: "Please explain this code:\n\n{{selection}}" },
+		{ name: "Improve writing", template: "Please improve the writing in this text:\n\n{{selection}}" },
+	],
 };
 
 export class CodexChatSettingTab extends PluginSettingTab {
@@ -199,6 +210,18 @@ export class CodexChatSettingTab extends PluginSettingTab {
 					})
 			);
 
+		// --- Prompt templates section ---
+		new Setting(containerEl).setName("Prompt templates").setHeading();
+
+		new Setting(containerEl).setDesc(
+			"Reusable prompt templates. Use {{selection}}, {{note}}, and {{title}} as variables."
+		);
+
+		const templatesContainer = containerEl.createDiv({
+			cls: "codex-templates-settings",
+		});
+		this.renderTemplateList(templatesContainer);
+
 		// --- Auth section ---
 		new Setting(containerEl).setName("Authentication").setHeading();
 
@@ -216,6 +239,96 @@ export class CodexChatSettingTab extends PluginSettingTab {
 					.onClick(async () => {
 						await this.plugin.auth.triggerLogin();
 					})
+			);
+	}
+
+	private renderTemplateList(container: HTMLElement) {
+		container.empty();
+
+		for (let i = 0; i < this.plugin.settings.promptTemplates.length; i++) {
+			const tmpl = this.plugin.settings.promptTemplates[i];
+			if (!tmpl) continue;
+
+			new Setting(container)
+				.setName(tmpl.name)
+				.setDesc(
+					tmpl.template.length > 60
+						? tmpl.template.slice(0, 60) + "..."
+						: tmpl.template
+				)
+				.addButton((btn) =>
+					btn
+						.setIcon("pencil")
+						.setTooltip("Edit")
+						.onClick(() => {
+							this.editTemplate(container, i);
+						})
+				)
+				.addButton((btn) =>
+					btn
+						.setIcon("trash")
+						.setTooltip("Delete")
+						.onClick(async () => {
+							this.plugin.settings.promptTemplates.splice(i, 1);
+							await this.plugin.saveSettings();
+							this.renderTemplateList(container);
+						})
+				);
+		}
+
+		new Setting(container).addButton((btn) =>
+			btn
+				.setButtonText("Add template")
+				.setCta()
+				.onClick(() => {
+					this.plugin.settings.promptTemplates.push({
+						name: "New template",
+						template: "",
+					});
+					this.editTemplate(
+						container,
+						this.plugin.settings.promptTemplates.length - 1
+					);
+				})
+		);
+	}
+
+	private editTemplate(container: HTMLElement, index: number) {
+		const tmpl = this.plugin.settings.promptTemplates[index];
+		if (!tmpl) return;
+
+		container.empty();
+
+		const nameEl = new Setting(container)
+			.setName("Template name")
+			.addText((text) =>
+				text.setValue(tmpl.name).onChange((value) => {
+					tmpl.name = value;
+				})
+			);
+		void nameEl;
+
+		const templateEl = container.createDiv({ cls: "codex-template-edit" });
+		const textarea = templateEl.createEl("textarea", {
+			cls: "codex-template-textarea",
+			attr: { rows: "4", placeholder: "Enter template text..." },
+		});
+		textarea.value = tmpl.template;
+		textarea.addEventListener("input", () => {
+			tmpl.template = textarea.value;
+		});
+
+		new Setting(container)
+			.addButton((btn) =>
+				btn.setButtonText("Save").setCta().onClick(async () => {
+					await this.plugin.saveSettings();
+					this.renderTemplateList(container);
+				})
+			)
+			.addButton((btn) =>
+				btn.setButtonText("Cancel").onClick(() => {
+					this.renderTemplateList(container);
+				})
 			);
 	}
 }

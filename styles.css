@@ -62,7 +62,8 @@
 }
 
 /* New chat button */
-.codex-new-chat-btn {
+.codex-new-chat-btn,
+.codex-export-btn {
 	border: none;
 	background: transparent;
 	cursor: pointer;
@@ -71,8 +72,27 @@
 	color: var(--text-muted);
 }
 
-.codex-new-chat-btn:hover {
+.codex-new-chat-btn:hover,
+.codex-export-btn:hover {
 	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+/* Session switcher */
+.codex-session-label {
+	font-size: 14px;
+	font-weight: 600;
+	cursor: pointer;
+	padding: 2px 6px;
+	border-radius: 4px;
+	color: var(--text-normal);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 180px;
+}
+
+.codex-session-label:hover {
 	background: var(--background-modifier-hover);
 }
 
@@ -430,4 +450,113 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
+}
+
+/* ─── @file autocomplete suggestions ─── */
+.codex-file-suggestions {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	max-height: 200px;
+	overflow-y: auto;
+	margin-bottom: 4px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.codex-suggestion-item {
+	padding: 6px 10px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+}
+
+.codex-suggestion-item:hover,
+.codex-suggestion-active {
+	background: var(--background-modifier-hover);
+}
+
+.codex-suggestion-name {
+	font-weight: 500;
+	color: var(--text-normal);
+}
+
+.codex-suggestion-path {
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
+/* ─── Template button ─── */
+.codex-template-btn {
+	border: none;
+	background: transparent;
+	cursor: pointer;
+	padding: 4px;
+	border-radius: 4px;
+	color: var(--text-muted);
+}
+
+.codex-template-btn:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+/* ─── Template settings ─── */
+.codex-template-textarea {
+	width: 100%;
+	min-height: 80px;
+	resize: vertical;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	box-sizing: border-box;
+	margin: 8px 0;
+}
+
+.codex-template-textarea:focus {
+	border-color: var(--interactive-accent);
+	outline: none;
+}
+
+.codex-template-edit {
+	margin: 4px 0;
+}
+
+/* ─── Rename overlay ─── */
+.codex-rename-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.3);
+	z-index: 9999;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.codex-rename-box {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 16px;
+	min-width: 280px;
+}
+
+.codex-rename-label {
+	font-weight: 600;
+	margin-bottom: 8px;
+}
+
+.codex-rename-input {
+	width: 100%;
+	padding: 6px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	box-sizing: border-box;
 }
