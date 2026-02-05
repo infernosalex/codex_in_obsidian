@@ -107,6 +107,32 @@ export default class CodexChatPlugin extends Plugin {
 			},
 		});
 
+		// Focus chat input
+		this.addCommand({
+			id: "focus-chat-input",
+			name: "Focus chat input",
+			callback: () => {
+				const chatView = this.getChatView();
+				if (chatView) {
+					chatView.focusInput();
+				} else {
+					void this.activateChatView().then((v) => v?.focusInput());
+				}
+			},
+		});
+
+		// New conversation
+		this.addCommand({
+			id: "new-conversation",
+			name: "New conversation",
+			callback: () => {
+				const chatView = this.getChatView();
+				if (chatView) {
+					chatView.startNewConversation();
+				}
+			},
+		});
+
 		// Settings tab
 		this.addSettingTab(new CodexChatSettingTab(this.app, this));
 

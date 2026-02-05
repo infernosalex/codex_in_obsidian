@@ -5,12 +5,6 @@ import type { ChatMessage, CodexItem, CodexThreadEvent } from "../codex-service"
 export const VIEW_TYPE_CODEX_CHAT = "codex-chat-view";
 
 /**
- * Maximum number of prior turns (user+assistant pairs) to include
- * as conversation memory in the prompt.
- */
-const MAX_MEMORY_TURNS = 10;
-
-/**
  * Maximum number of messages to persist across reloads.
  */
 const MAX_PERSISTED_MESSAGES = 50;
@@ -30,6 +24,7 @@ export class CodexChatView extends ItemView {
 	private currentStreamEl: HTMLElement | null = null;
 	private currentStreamText = "";
 	private isGenerating = false;
+	private renderTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: CodexChatPlugin) {
 		super(leaf);
@@ -170,28 +165,47 @@ export class CodexChatView extends ItemView {
 		return "";
 	}
 
+	/**
+	 * Focus the chat input textarea.
+	 */
+	focusInput() {
+		this.inputEl?.focus();
+	}
+
+	/**
+	 * Start a new conversation (clears messages, shows welcome).
+	 */
+	startNewConversation() {
+		this.clearConversation();
+	}
+
 	// ─── Internal ───
 
 	/**
 	 * Build a conversation-memory preamble from prior messages.
-	 * Returns a string with prior turns formatted for the model.
+	 * Respects the configurable memory depth and character budget.
 	 */
-	private buildConversationMemory(): string {
+	private buildConversationMemory(maxChars: number): string {
 		if (this.messages.length === 0) return "";
 
-		// Take at most MAX_MEMORY_TURNS recent user/assistant pairs
-		const recentMessages = this.messages.slice(-(MAX_MEMORY_TURNS * 2));
+		const memoryTurns = this.plugin.settings.memoryTurns;
+		const recentMessages = this.messages.slice(-(memoryTurns * 2));
 		if (recentMessages.length === 0) return "";
 
-		const parts: string[] = [];
-		parts.push("Previous conversation:\n");
+		const header = "Previous conversation:\n";
+		let totalLength = header.length;
+		const parts: string[] = [header];
+
 		for (const msg of recentMessages) {
 			const role = msg.role === "user" ? "User" : "Assistant";
-			// Truncate each prior message to avoid huge prompts
-			const content = msg.content.length > 2000
-				? msg.content.slice(0, 2000) + "...(truncated)"
+			const perMsgLimit = Math.max(500, Math.floor((maxChars - totalLength) / 2));
+			const content = msg.content.length > perMsgLimit
+				? msg.content.slice(0, perMsgLimit) + "...(truncated)"
 				: msg.content;
-			parts.push(`${role}: ${content}\n`);
+			const line = `${role}: ${content}\n`;
+			if (totalLength + line.length > maxChars) break;
+			parts.push(line);
+			totalLength += line.length;
 		}
 		parts.push("\n");
 		return parts.join("");
@@ -244,6 +258,10 @@ export class CodexChatView extends ItemView {
 			this.plugin.codexService.cancel();
 			this.setGenerating(false);
 			this.setStatus("");
+		}
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = null;
 		}
 		this.messages = [];
 		this.currentStreamEl = null;
@@ -314,17 +332,18 @@ export class CodexChatView extends ItemView {
 		this.messages.push(userMsg);
 		this.renderUserMessage(userText);
 
-		// Build full prompt with conversation memory + vault context
+		// Build full prompt with smart context budgeting
 		let fullPrompt = "";
+		const totalBudget = this.plugin.settings.maxContextLength;
+		const ratio = this.plugin.settings.contextBudgetRatio;
+		const vaultBudget = Math.floor(totalBudget * ratio);
+		const memoryBudget = totalBudget - vaultBudget;
 
-		// 1. Conversation memory
-		const memory = this.buildConversationMemory();
-
-		// 2. Vault context
+		// 1. Vault context (gets its share of the budget)
 		try {
 			const context = await this.plugin.vaultContext.buildContext(
 				this.plugin.settings.contextMode,
-				this.plugin.settings.maxContextLength
+				vaultBudget
 			);
 			if (context) {
 				fullPrompt += context;
@@ -333,7 +352,8 @@ export class CodexChatView extends ItemView {
 			console.warn("Failed to build vault context:", err);
 		}
 
-		// 3. Memory (placed after vault context, before current request)
+		// 2. Conversation memory (gets the remaining budget)
+		const memory = this.buildConversationMemory(memoryBudget);
 		if (memory) {
 			fullPrompt += memory;
 		}
@@ -371,6 +391,10 @@ export class CodexChatView extends ItemView {
 
 	private handleCancel() {
 		this.plugin.codexService.cancel();
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = null;
+		}
 		this.setGenerating(false);
 		this.setStatus("");
 		if (this.currentStreamEl && !this.currentStreamText) {
@@ -402,9 +426,23 @@ export class CodexChatView extends ItemView {
 
 	private appendStreamText(text: string) {
 		this.currentStreamText += text;
+
+		// Debounce markdown re-renders to avoid excessive work during fast streaming.
+		// Plain text is shown immediately; full markdown render fires at most every 150ms.
 		if (this.currentStreamEl) {
-			void this.renderMarkdownInEl(this.currentStreamEl, this.currentStreamText);
+			// Immediate lightweight update: just set text so user sees progress
+			this.currentStreamEl.setText(this.currentStreamText);
 		}
+
+		if (!this.renderTimer) {
+			this.renderTimer = setTimeout(() => {
+				this.renderTimer = null;
+				if (this.currentStreamEl) {
+					void this.renderMarkdownInEl(this.currentStreamEl, this.currentStreamText);
+				}
+			}, 150);
+		}
+
 		this.scrollToBottom();
 	}
 
@@ -431,6 +469,12 @@ export class CodexChatView extends ItemView {
 	}
 
 	private finalizeResponse(fullText: string) {
+		// Clear debounced render timer
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = null;
+		}
+
 		const text = fullText || this.currentStreamText;
 
 		if (this.currentStreamEl && text) {

@@ -1,6 +1,6 @@
 import { Modal, App, Notice } from "obsidian";
 import { spawn, ChildProcess } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { getShellEnv, resolveCodexBinary } from "./shell-env";
@@ -32,32 +32,70 @@ export class CodexAuth {
 
 	/**
 	 * Check if the user has valid cached credentials.
-	 * Looks for ~/.codex/auth.json or tries `codex auth status`.
+	 * Reads ~/.codex/auth.json and checks for token expiry.
+	 * Falls back to `codex auth status` if the file-based check is inconclusive.
 	 */
 	async isAuthenticated(): Promise<boolean> {
-		// Quick check: does the auth file exist?
 		const authFile = join(homedir(), ".codex", "auth.json");
-		if (existsSync(authFile)) {
-			return true;
+		if (!existsSync(authFile)) {
+			return false;
 		}
 
-		// Fallback: try running a quick codex command to see if auth works
+		// Try to parse the auth file and check token expiry
+		try {
+			const raw = readFileSync(authFile, "utf-8");
+			const data = JSON.parse(raw) as Record<string, unknown>;
+
+			// Check common expiry fields
+			const expiresAt = data["expires_at"] ?? data["expiry"];
+			if (typeof expiresAt === "number") {
+				// Treat as unix timestamp (seconds). Add 60s buffer.
+				const nowSec = Math.floor(Date.now() / 1000);
+				if (expiresAt <= nowSec + 60) {
+					// Token expired — try refresh via CLI
+					return this.checkAuthViaCli();
+				}
+			}
+
+			// If we have an access_token or token field, consider authenticated
+			if (data["access_token"] || data["token"]) {
+				return true;
+			}
+
+			// File exists but structure is unknown — trust it
+			return true;
+		} catch {
+			// File exists but is unparseable — try CLI fallback
+			return this.checkAuthViaCli();
+		}
+	}
+
+	/**
+	 * Check authentication status via the CLI as a fallback.
+	 */
+	private checkAuthViaCli(): Promise<boolean> {
 		return new Promise<boolean>((resolve) => {
 			try {
-				const proc = spawn(this.binaryPath, ["--version"], {
-					timeout: 5000,
+				const proc = spawn(this.binaryPath, ["auth", "status"], {
+					timeout: 10000,
 					stdio: ["ignore", "pipe", "pipe"],
 					env: getShellEnv(),
 				});
 
-				proc.stdout?.on("data", () => {
-					// consume output
+				let stdout = "";
+				proc.stdout?.on("data", (chunk: Uint8Array) => {
+					stdout += new TextDecoder().decode(chunk);
 				});
 
 				proc.on("close", (code) => {
-					// If codex runs at all, it's installed. Auth is separate.
-					// We rely on auth.json existence for actual auth check.
-					resolve(false);
+					if (code === 0) {
+						// CLI confirms auth is valid
+						resolve(true);
+					} else {
+						// Check if stdout mentions "logged in" or similar
+						const lower = stdout.toLowerCase();
+						resolve(lower.includes("logged in") || lower.includes("authenticated"));
+					}
 				});
 
 				proc.on("error", () => {

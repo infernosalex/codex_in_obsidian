@@ -12,6 +12,8 @@ export interface CodexChatSettings {
 	maxContextLength: number;
 	modelOverride: string;
 	reasoningEffort: ReasoningEffort;
+	memoryTurns: number;
+	contextBudgetRatio: number;
 }
 
 export const DEFAULT_SETTINGS: CodexChatSettings = {
@@ -21,6 +23,8 @@ export const DEFAULT_SETTINGS: CodexChatSettings = {
 	maxContextLength: 10000,
 	modelOverride: "",
 	reasoningEffort: "medium",
+	memoryTurns: 10,
+	contextBudgetRatio: 0.6,
 };
 
 export class CodexChatSettingTab extends PluginSettingTab {
@@ -123,6 +127,41 @@ export class CodexChatSettingTab extends PluginSettingTab {
 					.setDynamicTooltip()
 					.onChange(async (value) => {
 						this.plugin.settings.maxContextLength = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// --- Memory turns ---
+		new Setting(containerEl)
+			.setName("Memory turns")
+			.setDesc(
+				"Number of prior user/assistant turn pairs to include as conversation memory (1–50)."
+			)
+			.addSlider((slider) =>
+				slider
+					.setLimits(1, 50, 1)
+					.setValue(this.plugin.settings.memoryTurns)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.memoryTurns = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		// --- Context budget ratio ---
+		new Setting(containerEl)
+			.setName("Context budget ratio")
+			.setDesc(
+				// eslint-disable-next-line obsidianmd/ui/sentence-case
+				"How much of the max context length to allocate to vault context vs. conversation memory (0.1 = mostly memory, 0.9 = mostly vault context)."
+			)
+			.addSlider((slider) =>
+				slider
+					.setLimits(0.1, 0.9, 0.1)
+					.setValue(this.plugin.settings.contextBudgetRatio)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.contextBudgetRatio = value;
 						await this.plugin.saveSettings();
 					})
 			);
